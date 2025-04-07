@@ -2,86 +2,59 @@ import os
 import requests
 import joblib
 import logging
-import zipfile
 import pandas as pd
 import numpy as np
 import warnings
 from http.server import BaseHTTPRequestHandler
 import json
-from urllib.parse import parse_qs
 
 # Suppress sklearn warnings
 warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
-
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Environment variables
-DIABETES_MODEL_URL = os.getenv("DIABETES_MODEL_URL")
-SCALER_URL = os.getenv("SCALER_URL")
-MULTI_MODEL_URL = os.getenv("MULTI_MODEL_URL")
-
-MODEL_PATHS = {
-    "DIABETES_MODEL": "finaliseddiabetes_model.zip",
-    "SCALER": "finalisedscaler.zip",
-    "MULTI_MODEL": "nodiabetes.zip",
-}
-
-EXTRACTED_MODELS = {
-    "DIABETES_MODEL": "finaliseddiabetes_model.joblib",
-    "SCALER": "finalisedscaler.joblib",
-    "MULTI_MODEL": "nodiabetes.joblib",
+# Direct Google Drive download links (file IDs)
+MODEL_FILES = {
+    "DIABETES_MODEL": {
+        "id": "14H_wPtW4_W1XPFiiJ3tkmsFFACac_jxS",
+        "filename": "finaliseddiabetes_model.joblib"
+    },
+    "SCALER": {
+        "id": "1PnILhtH35yVwG1xfd0bNj7jBquX855bk",
+        "filename": "finalisedscaler.joblib"
+    },
+    "MULTI_MODEL": {
+        "id": "1cnjaKDyR7AiCojKsm0rZYtQZSCiJVWW6",
+        "filename": "nodiabetes.joblib"
+    }
 }
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def download_model(url, zip_filename):
-    zip_path = os.path.join(BASE_DIR, zip_filename)
-    if not url:
-        logging.error(f"Missing URL for {zip_filename}")
-        return False
+def gdrive_download(file_id, destination):
+    """Download file from Google Drive by file ID."""
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
     try:
-        response = requests.get(url)
+        response = requests.get(url, stream=True)
         if response.status_code == 200:
-            with open(zip_path, 'wb') as f:
-                f.write(response.content)
-            return True
-        return False
+            with open(destination, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            logging.info(f"Downloaded {destination}")
+        else:
+            raise Exception(f"Failed to download {destination}")
     except Exception as e:
-        logging.error(f"Error downloading {zip_filename}: {e}")
-        return False
+        logging.error(f"Download error for {destination}: {e}")
 
-def extract_if_needed(zip_filename, extracted_filename):
-    zip_path = os.path.join(BASE_DIR, zip_filename)
-    extracted_path = os.path.join(BASE_DIR, extracted_filename)
-    if os.path.exists(extracted_path):
-        return True
-    if not os.path.exists(zip_path):
-        return False
-    try:
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(BASE_DIR)
-        return True
-    except Exception as e:
-        return False
-
-def load_model(model_filename):
-    path = os.path.join(BASE_DIR, model_filename)
-    return joblib.load(path) if os.path.exists(path) else None
-
-def initialize_models():
+def load_models():
     models = {}
-    for key in MODEL_PATHS:
-        zip_file = MODEL_PATHS[key]
-        extracted = EXTRACTED_MODELS[key]
-        url = globals().get(f"{key}_URL", "")
-        if not os.path.exists(os.path.join(BASE_DIR, extracted)):
-            download_model(url, zip_file)
-            extract_if_needed(zip_file, extracted)
-        models[key] = load_model(extracted)
+    for key, info in MODEL_FILES.items():
+        file_path = os.path.join(BASE_DIR, info["filename"])
+        if not os.path.exists(file_path):
+            gdrive_download(info["id"], file_path)
+        models[key] = joblib.load(file_path)
     return models
 
-models = initialize_models()
+models = load_models()
 
 FEATURE_ORDER = [
     'Pregnancies', 'Glucose', 'BloodPressure', 'Insulin',
@@ -100,7 +73,7 @@ def validate_input(value, input_type=float, min_value=0, max_value=None):
         return None
 
 def validate_gender(gender):
-    return 1 if gender.lower() == 'male' else 0 if gender.lower() == 'female' else None
+    return 1 if gender and gender.lower() == 'male' else 0 if gender and gender.lower() == 'female' else None
 
 def calculate_diabetes_pedigree(family, first=0, second=0):
     return min((first * 0.5 + second * 0.25) if family else 0.0, 1.0)
@@ -138,7 +111,6 @@ def handler(request):
                     "body": json.dumps({"status": "error", "error": "Invalid input values"})
                 }
 
-            # Use multi-model logic
             if systolic < 90 or diastolic < 60:
                 df_multi = pd.DataFrame([{
                     'Age': age,
@@ -166,7 +138,6 @@ def handler(request):
                     })
                 }
 
-            # Use diabetes-only model
             pregnancies = validate_input(body.get('pregnancies', 0))
             insulin = validate_input(body.get('insulin'))
             first = validate_input(body.get('first_degree_relatives', 0))
