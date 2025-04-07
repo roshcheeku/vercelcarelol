@@ -1,13 +1,12 @@
-from flask import Flask, request, jsonify
+import json
 import pandas as pd
 import warnings
 from download_models import get_models
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
 
-app = Flask(__name__)
-
-# Load models from temporary dir
 diabetes_model, scaler, multi_condition_model = get_models()
 
 FEATURE_ORDER = ['Glucose', 'Insulin', 'BloodPressure', 'BMI', 
@@ -27,8 +26,6 @@ def get_multi_condition_predictions(df):
     try:
         predictions = multi_condition_model.predict(df)[0]
         probs_list = multi_condition_model.predict_proba(df)
-        if len(probs_list) < 4:
-            raise ValueError("Unexpected probability output.")
         return {
             'model': "multi-condition",
             'predictions': {
@@ -58,22 +55,20 @@ def get_diabetes_prediction(df):
     except Exception as e:
         return {"error": f"Diabetes prediction failed: {str(e)}"}
 
-@app.route('/predict', methods=['POST'])
-def predict_health():
+# ✅ Vercel Serverless Function handler
+async def handler(request: Request):
     try:
-        data = request.json
-        if not data:
-            return jsonify({"error": "No input data provided"}), 400
+        data = await request.json()
 
         required_fields = ["gender", "age", "glucose", "bmi", "systolic", "diastolic"]
         missing_fields = [field for field in required_fields if field not in data]
 
         if missing_fields:
-            return jsonify({"error": f"Missing fields: {', '.join(missing_fields)}"}), 400
+            return JSONResponse({"error": f"Missing fields: {', '.join(missing_fields)}"}, status_code=400)
 
         gender = data["gender"].strip().lower()
         if gender not in ["male", "female"]:
-            return jsonify({"error": "Invalid gender input, must be 'male' or 'female'"}), 400
+            return JSONResponse({"error": "Invalid gender input, must be 'male' or 'female'"}, status_code=400)
         data["Gender"] = 1 if gender == "male" else 0
 
         try:
@@ -83,7 +78,7 @@ def predict_health():
             glucose = float(data["glucose"])
             bmi = float(data["bmi"])
         except ValueError:
-            return jsonify({"error": "Invalid numerical input"}), 400
+            return JSONResponse({"error": "Invalid numerical input"}, status_code=400)
 
         use_multi_condition = systolic < 90 or diastolic < 60
 
@@ -110,7 +105,7 @@ def predict_health():
             df_diabetes = df_diabetes[FEATURE_ORDER]
             results = get_diabetes_prediction(df_diabetes)
 
-        return jsonify(results)
+        return JSONResponse(results)
 
     except Exception as e:
-        return jsonify({"error": f"Prediction failed: {str(e)}"}), 500
+        return JSONResponse({"error": f"Prediction failed: {str(e)}"}, status_code=500)
