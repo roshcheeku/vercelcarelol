@@ -1,0 +1,9 @@
+# Ignore large or unnecessary files during deployment
+*.joblib
+*.h5
+*.pkl
+*.zip
+*.tar.gz
+*.onnx
+models/
+__pycache__/
